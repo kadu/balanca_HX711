@@ -3,6 +3,7 @@
 
 #include <HX711_ADC.h>
 #include <EEPROM.h>
+#include <ESP8266WiFi.h>
 #include "DisplayManager.h"
 
 class LoadCellMonitor;
@@ -33,6 +34,9 @@ public:
     }
 
     void setRecipe(const char* name) { activeRecipe = name; }
+    float getWeight() { return scale.getData(); }
+    const char* getRecipe() { return activeRecipe; }
+    unsigned long getElapsedTime() { return timerElapsedTime; }
 
     void begin() {
         scale.begin();
@@ -56,7 +60,6 @@ public:
         float weight = scale.getData();
         float absWeight = weight > 0 ? weight : -weight;
 
-        // Lógica do Cronômetro
         if (!timerRunning && absWeight > weightThreshold) {
             timerStartTime = millis();
             timerRunning = true;
@@ -69,36 +72,43 @@ public:
         oled.clearDisplay();
         oled.setTextColor(SSD1306_WHITE);
         
-            // --- Topo: Cronômetro e Receita ---
+        // --- Topo: Cronômetro ---
+        oled.setTextSize(1);
+        oled.setCursor(0, 0);
+        oled.print("TIME: ");
+        
+        unsigned long totalSeconds = timerElapsedTime / 1000;
+        char timeBuf[16];
+        sprintf(timeBuf, "%02u:%02u.%02u", (unsigned int)(totalSeconds / 60), (unsigned int)(totalSeconds % 60), (unsigned int)((timerElapsedTime % 1000) / 10));
+        oled.print(timeBuf);
+        
+        // --- Linha 2: Receita e WiFi ---
+        oled.setCursor(0, 16);
+        oled.print("REC: ");
+        oled.print(activeRecipe);
+
+        // Ícone de WiFi
+        if (WiFi.status() == WL_CONNECTED) {
+            // Desenha apenas os arcos do sinal no canto superior
+            oled.drawCircle(120, 5, 2, SSD1306_WHITE);
+            oled.drawCircle(120, 5, 4, SSD1306_WHITE);
+        }
+        
+        oled.drawFastHLine(0, 10, 128, SSD1306_WHITE);
+        
+        // --- Centro: Peso ---
+        if (absWeight < 0.5) weight = 0.0;
+        oled.setCursor(0, 32);
+        if (absWeight < 1000.0) {
+            oled.setTextSize(4);
+            oled.print((int)weight);
             oled.setTextSize(1);
-            oled.setCursor(0, 0);
-            oled.print("TIME: ");
-            
-            unsigned long totalSeconds = timerElapsedTime / 1000;
-            char timeBuf[16];
-            sprintf(timeBuf, "%02u:%02u.%02u", (unsigned int)(totalSeconds / 60), (unsigned int)(totalSeconds % 60), (unsigned int)((timerElapsedTime % 1000) / 10));
-            oled.print(timeBuf);
-            
-            // Nova linha para a Receita
-            oled.setCursor(0, 16);
-            oled.print("REC:  ");
-            oled.print(activeRecipe);
-            
-            oled.drawFastHLine(0, 12, 128, SSD1306_WHITE);
-            
-            // --- Centro: Peso ---
-            if (absWeight < 0.5) weight = 0.0;
-            oled.setCursor(0, 32);
-            if (absWeight < 1000.0) {
-                oled.setTextSize(4);
-                oled.print((int)weight);
-                oled.setTextSize(1);
-                oled.print(" g");
-            } else {
-                oled.setTextSize(3);
-                oled.print((int)weight);
-                oled.print(" g");
-            }
+            oled.print(" g");
+        } else {
+            oled.setTextSize(3);
+            oled.print((int)weight);
+            oled.print(" g");
+        }
 
         if (scale.getTareStatus()) {
             oled.setTextSize(1);
@@ -114,7 +124,11 @@ public:
         timerRunning = false;
         timerElapsedTime = 0;
         timerStartTime = 0;
-        Serial.println("Tare and Timer Reset executed.");
+    }
+
+    void stop() {
+        detachInterrupt(digitalPinToInterrupt(dout));
+        Serial.println("LoadCell Interrupts Detached.");
     }
 };
 
