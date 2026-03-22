@@ -13,7 +13,11 @@ private:
     DisplayManager& display;
     
     char mqtt_server[40] = "";
+    char mqtt_user[20] = "";
+    char mqtt_pass[20] = "";
+    char mqtt_topic[40] = "balanca/iot";
     char mqtt_enabled[2] = "0"; 
+    
     const int eeprom_mqtt_start = 100;
 
 public:
@@ -22,8 +26,22 @@ public:
     void loadSettings();
     void saveSettings();
     void setupConfigPortal();
+    void updateSettings(const char* server, const char* user, const char* pass, const char* topic, bool enabled);
     bool isConnected();
     void loop();
+    
+    // Getters para a Web UI
+    const char* getServer() { return mqtt_server; }
+    const char* getUser() { return mqtt_user; }
+    const char* getPass() { return mqtt_pass; }
+    const char* getTopic() { return mqtt_topic; }
+    bool isMqttEnabled() { return mqtt_enabled[0] == '1'; }
+
+    // Teste de conexão
+    bool testConnection(const char* s, const char* u, const char* p, const char* t);
+
+    void publishStatus(const char* status);
+    void publishRecipe(const char* recipe);
     void publishWeight(float weight);
 };
 

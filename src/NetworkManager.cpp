@@ -15,7 +15,10 @@ void NetworkManager::begin() {
 void NetworkManager::loadSettings() {
     EEPROM.begin(512);
     EEPROM.get(eeprom_mqtt_start, mqtt_server);
-    EEPROM.get(eeprom_mqtt_start + 40, mqtt_enabled);
+    EEPROM.get(eeprom_mqtt_start + 40, mqtt_user);
+    EEPROM.get(eeprom_mqtt_start + 60, mqtt_pass);
+    EEPROM.get(eeprom_mqtt_start + 80, mqtt_topic);
+    EEPROM.get(eeprom_mqtt_start + 120, mqtt_enabled);
     if (mqtt_enabled[0] != '0' && mqtt_enabled[0] != '1') {
         mqtt_enabled[0] = '0';
         mqtt_enabled[1] = '\0';
@@ -24,53 +27,90 @@ void NetworkManager::loadSettings() {
 
 void NetworkManager::saveSettings() {
     EEPROM.put(eeprom_mqtt_start, mqtt_server);
-    EEPROM.put(eeprom_mqtt_start + 40, mqtt_enabled);
+    EEPROM.put(eeprom_mqtt_start + 40, mqtt_user);
+    EEPROM.put(eeprom_mqtt_start + 60, mqtt_pass);
+    EEPROM.put(eeprom_mqtt_start + 80, mqtt_topic);
+    EEPROM.put(eeprom_mqtt_start + 120, mqtt_enabled);
     EEPROM.commit();
+}
+
+void NetworkManager::updateSettings(const char* s, const char* u, const char* p, const char* t, bool e) {
+    strncpy(mqtt_server, s, 39);
+    strncpy(mqtt_user, u, 19);
+    strncpy(mqtt_pass, p, 19);
+    strncpy(mqtt_topic, t, 39);
+    mqtt_enabled[0] = e ? '1' : '0';
+    saveSettings();
+    mqttClient.disconnect();
+    mqttClient.setServer(mqtt_server, 1883);
+}
+
+bool NetworkManager::testConnection(const char* s, const char* u, const char* p, const char* t) {
+    Serial.printf("MQTT Test: server=%s, user=%s\n", s, u);
+    mqttClient.disconnect();
+    mqttClient.setServer(s, 1883);
+    
+    bool connected = false;
+    if (strlen(u) > 0) {
+        connected = mqttClient.connect("BalancaTest", u, p);
+    } else {
+        connected = mqttClient.connect("BalancaTest");
+    }
+
+    if (connected) {
+        String testTopic = String(t) + "/test";
+        mqttClient.publish(testTopic.c_str(), "Teste de Conexão OK");
+        // Volta para a configuração original após o teste
+        mqttClient.disconnect();
+        mqttClient.setServer(mqtt_server, 1883);
+        return true;
+    }
+    
+    // Restaura servidor original se falhar
+    mqttClient.setServer(mqtt_server, 1883);
+    return false;
 }
 
 void NetworkManager::setupConfigPortal() {
     WiFiManager wm;
-    
-    // Habilita debug detalhado no Serial
-    wm.setDebugOutput(true);
-    
-    // Callback para quando um cliente se conecta ao AP (SoftAP)
-    static WiFiEventHandler stationConnectedHandler = WiFi.onSoftAPModeStationConnected([](const WiFiEventSoftAPModeStationConnected& evt) {
-        Serial.printf("DEBUG: Cliente Conectado! MAC: %02X:%02u:%02X:%02X:%02X:%02X\n", 
-            evt.mac[0], evt.mac[1], evt.mac[2], evt.mac[3], evt.mac[4], evt.mac[5]);
-    });
-
-    // Configura o portal
     wm.setAPStaticIPConfig(IPAddress(192,168,4,1), IPAddress(192,168,4,1), IPAddress(255,255,255,0));
-    
-    display.showStatus("MODO CONFIG", "Conecte: BalancaAP", "IP: 192.168.4.1");
-    Serial.println("Aguardando conexao no IP 192.168.4.1...");
-    
     WiFiManagerParameter custom_mqtt_server("server", "Servidor MQTT", mqtt_server, 40);
-    WiFiManagerParameter custom_mqtt_en("mqtt_en", "MQTT (1=Lig / 0=Desl)", mqtt_enabled, 2);
+    WiFiManagerParameter custom_mqtt_user("user", "Usuario MQTT", mqtt_user, 20);
+    WiFiManagerParameter custom_mqtt_pass("pass", "Senha MQTT", mqtt_pass, 20);
+    WiFiManagerParameter custom_mqtt_topic("topic", "Topico Base", mqtt_topic, 40);
+    const char* custom_html = mqtt_enabled[0] == '1' ? "type='checkbox' value='1' checked" : "type='checkbox' value='1'";
+    WiFiManagerParameter custom_mqtt_en("mqtt_en", "Ativar MQTT", "1", 2, custom_html, WFM_LABEL_AFTER);
+    wm.addParameter(&custom_mqtt_server); wm.addParameter(&custom_mqtt_user); wm.addParameter(&custom_mqtt_pass); wm.addParameter(&custom_mqtt_topic); wm.addParameter(&custom_mqtt_en);
+    if (!wm.startConfigPortal("BalancaAP")) { delay(1000); ESP.restart(); }
+    strcpy(mqtt_server, custom_mqtt_server.getValue()); strcpy(mqtt_user, custom_mqtt_user.getValue()); strcpy(mqtt_pass, custom_mqtt_pass.getValue()); strcpy(mqtt_topic, custom_mqtt_topic.getValue());
+    strcpy(mqtt_enabled, strlen(custom_mqtt_en.getValue()) == 0 ? "0" : "1");
+    saveSettings(); ESP.restart();
+}
 
-    wm.addParameter(&custom_mqtt_server);
-    wm.addParameter(&custom_mqtt_en);
-
-    // Tenta abrir o portal (bloqueante)
-    if (!wm.startConfigPortal("BalancaAP")) {
-        Serial.println("Falha no portal ou timeout");
-        delay(1000);
-        ESP.restart();
+void NetworkManager::publishStatus(const char* status) {
+    if (mqttClient.connected()) {
+        String topic = String(mqtt_topic) + "/status";
+        String payload = "{\"status\":\"" + String(status) + "\",\"ip\":\"" + WiFi.localIP().toString() + "\"}";
+        mqttClient.publish(topic.c_str(), payload.c_str(), true);
     }
-    
-    strcpy(mqtt_server, custom_mqtt_server.getValue());
-    strcpy(mqtt_enabled, custom_mqtt_en.getValue());
-    saveSettings();
-    
-    display.showStatus("SUCESSO", "WiFi Configurado", "Reiniciando...");
-    delay(2000);
-    ESP.restart();
 }
 
-bool NetworkManager::isConnected() {
-    return WiFi.status() == WL_CONNECTED;
+void NetworkManager::publishRecipe(const char* recipe) {
+    if (mqttClient.connected()) {
+        String topic = String(mqtt_topic) + "/receita";
+        mqttClient.publish(topic.c_str(), recipe, true);
+    }
 }
+
+void NetworkManager::publishWeight(float weight) {
+    if (mqttClient.connected()) {
+        String topic = String(mqtt_topic) + "/peso";
+        char buf[12]; itoa((int)round(weight), buf, 10);
+        mqttClient.publish(topic.c_str(), buf);
+    }
+}
+
+bool NetworkManager::isConnected() { return WiFi.status() == WL_CONNECTED; }
 
 void NetworkManager::loop() {
     if (isConnected() && mqtt_enabled[0] == '1') {
@@ -78,17 +118,10 @@ void NetworkManager::loop() {
             static unsigned long lastMqttRetry = 0;
             if (millis() - lastMqttRetry > 15000) {
                 lastMqttRetry = millis();
-                mqttClient.connect("BalancaIoT");
+                bool connected = mqtt_user[0] != '\0' ? mqttClient.connect("BalancaIoT", mqtt_user, mqtt_pass) : mqttClient.connect("BalancaIoT");
+                if (connected) publishStatus("online");
             }
         }
         mqttClient.loop();
-    }
-}
-
-void NetworkManager::publishWeight(float weight) {
-    if (mqttClient.connected()) {
-        char buf[10];
-        dtostrf(weight, 4, 1, buf);
-        mqttClient.publish("balanca/peso", buf);
     }
 }

@@ -25,7 +25,7 @@ private:
     unsigned long timerElapsedTime = 0;
     bool timerRunning = false;
     const float weightThreshold = 1.5;
-    const char* activeRecipe = "Padrao";
+    char activeRecipe[20] = "Padrao"; // Buffer fixo para segurança
 
 public:
     LoadCellMonitor(uint8_t d, uint8_t s, float defaultCf, DisplayManager& dm) 
@@ -33,7 +33,11 @@ public:
         globalLoadCellPtr = this;
     }
 
-    void setRecipe(const char* name) { activeRecipe = name; }
+    void setRecipe(const char* name) { 
+        strncpy(activeRecipe, name, sizeof(activeRecipe)-1);
+        activeRecipe[sizeof(activeRecipe)-1] = '\0';
+    }
+    
     float getWeight() { return scale.getData(); }
     const char* getRecipe() { return activeRecipe; }
     unsigned long getElapsedTime() { return timerElapsedTime; }
@@ -76,25 +80,22 @@ public:
         oled.setTextSize(1);
         oled.setCursor(0, 0);
         oled.print("TIME: ");
-        
         unsigned long totalSeconds = timerElapsedTime / 1000;
         char timeBuf[16];
         sprintf(timeBuf, "%02u:%02u.%02u", (unsigned int)(totalSeconds / 60), (unsigned int)(totalSeconds % 60), (unsigned int)((timerElapsedTime % 1000) / 10));
         oled.print(timeBuf);
         
-        // --- Linha 2: Receita e WiFi ---
-        oled.setCursor(0, 16);
-        oled.print("REC: ");
-        oled.print(activeRecipe);
-
-        // Ícone de WiFi
         if (WiFi.status() == WL_CONNECTED) {
-            // Desenha apenas os arcos do sinal no canto superior
             oled.drawCircle(120, 5, 2, SSD1306_WHITE);
             oled.drawCircle(120, 5, 4, SSD1306_WHITE);
         }
+
+        // --- Linha 2: Receita ---
+        oled.setCursor(0, 12);
+        oled.print("REC: ");
+        oled.print(activeRecipe);
         
-        oled.drawFastHLine(0, 10, 128, SSD1306_WHITE);
+        oled.drawFastHLine(0, 23, 128, SSD1306_WHITE);
         
         // --- Centro: Peso ---
         if (absWeight < 0.5) weight = 0.0;
@@ -115,7 +116,6 @@ public:
             oled.setCursor(105, 55);
             oled.print("[T]");
         }
-        
         oled.display();
     }
 
@@ -128,7 +128,6 @@ public:
 
     void stop() {
         detachInterrupt(digitalPinToInterrupt(dout));
-        Serial.println("LoadCell Interrupts Detached.");
     }
 };
 
