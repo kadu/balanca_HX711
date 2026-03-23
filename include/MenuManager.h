@@ -3,18 +3,19 @@
 
 #include <Arduino.h>
 #include "DisplayManager.h"
+#include "RecipeManager.h"
 
 class MenuManager {
 private:
-    const char* options[3] = {"Receita 1", "Receita 2", "Receita 3"};
     int currentIndex = 0;
     int selectedIndex = 0;
     bool active = false;
     DisplayManager& display;
+    RecipeManager& recipeManager;
     unsigned long lastDraw = 0;
 
 public:
-    MenuManager(DisplayManager& dm) : display(dm) {}
+    MenuManager(DisplayManager& dm, RecipeManager& rm) : display(dm), recipeManager(rm) {}
 
     void activate() {
         active = true;
@@ -25,7 +26,9 @@ public:
     bool isActive() const { return active; }
 
     void nextOption() {
-        currentIndex = (currentIndex + 1) % 3;
+        int count = recipeManager.getRecipes().size();
+        if (count == 0) return;
+        currentIndex = (currentIndex + 1) % count;
     }
 
     void selectCurrent() {
@@ -33,8 +36,12 @@ public:
         active = false;
     }
 
-    const char* getSelectedName() const {
-        return options[selectedIndex];
+    String getSelectedName() const {
+        const auto& recipes = recipeManager.getRecipes();
+        if (selectedIndex >= 0 && (size_t)selectedIndex < recipes.size()) {
+            return recipes[selectedIndex].name;
+        }
+        return "Padrao";
     }
 
     void draw() {
@@ -50,14 +57,25 @@ public:
         oled.println("--- MENU RECEITAS ---");
         oled.drawFastHLine(0, 10, 128, SSD1306_WHITE);
 
-        for (int i = 0; i < 3; i++) {
-            oled.setCursor(5, 20 + (i * 12));
-            if (i == currentIndex) {
-                oled.print("> ");
-            } else {
-                oled.print("  ");
+        const auto& recipes = recipeManager.getRecipes();
+        if (recipes.empty()) {
+            oled.setCursor(5, 30);
+            oled.print("Sem receitas...");
+        } else {
+            // Mostra ate 3 receitas centradas no indice atual
+            int start = max(0, currentIndex - 1);
+            int end = min((int)recipes.size(), start + 3);
+            if (end - start < 3 && recipes.size() > 3) start = max(0, end - 3);
+
+            for (int i = start; i < end; i++) {
+                oled.setCursor(5, 20 + ((i - start) * 12));
+                if (i == currentIndex) {
+                    oled.print("> ");
+                } else {
+                    oled.print("  ");
+                }
+                oled.print(recipes[i].name);
             }
-            oled.print(options[i]);
         }
         
         oled.setCursor(0, 55);
