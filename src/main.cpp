@@ -25,10 +25,10 @@
 
 // Objects
 DisplayManager display(OLED_WIDTH, OLED_HEIGHT, OLED_ADDR);
-LoadCellMonitor loadCellMonitor(LOADCELL_DOUT, LOADCELL_SCK, CALIBRATION_FACTOR, display, BUZZER_PIN);
 RecipeManager recipeManager;
-MenuManager menuManager(display, recipeManager);
 NetworkManager networkManager(display);
+LoadCellMonitor loadCellMonitor(LOADCELL_DOUT, LOADCELL_SCK, CALIBRATION_FACTOR, display, BUZZER_PIN, networkManager);
+MenuManager menuManager(display, recipeManager);
 WebServerManager webServer(80, loadCellMonitor, networkManager, recipeManager);
 OTAManager otaManager(display, loadCellMonitor);
 Button btn1(BTN_1_PIN);

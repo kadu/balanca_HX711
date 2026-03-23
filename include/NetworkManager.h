@@ -17,6 +17,8 @@ private:
     char mqtt_pass[20] = "";
     char mqtt_topic[40] = "balanca/iot";
     char mqtt_enabled[2] = "0"; 
+    char leds_enabled[2] = "1";
+    uint8_t led_brightness = 100; // 0-255
     
     const int eeprom_mqtt_start = 100;
 
@@ -26,18 +28,18 @@ public:
     void loadSettings();
     void saveSettings();
     void setupConfigPortal();
-    void updateSettings(const char* server, const char* user, const char* pass, const char* topic, bool enabled);
+    void updateSettings(const char* server, const char* user, const char* pass, const char* topic, bool enabled, bool ledEnable, uint8_t brightness);
     bool isConnected();
     void loop();
     
-    // Getters para a Web UI
     const char* getServer() { return mqtt_server; }
     const char* getUser() { return mqtt_user; }
     const char* getPass() { return mqtt_pass; }
     const char* getTopic() { return mqtt_topic; }
     bool isMqttEnabled() { return mqtt_enabled[0] == '1'; }
+    bool isLedEnabled() { return leds_enabled[0] == '1'; }
+    uint8_t getLedBrightness() { return led_brightness; }
 
-    // Teste de conexão
     bool testConnection(const char* s, const char* u, const char* p, const char* t);
 
     void publishStatus(const char* status);

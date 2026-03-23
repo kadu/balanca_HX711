@@ -4,8 +4,10 @@
 #include <HX711_ADC.h>
 #include <EEPROM.h>
 #include <ESP8266WiFi.h>
+#include <FastLED.h>
 #include "DisplayManager.h"
 #include "Recipe.h"
+#include "NetworkManager.h"
 
 class LoadCellMonitor;
 extern LoadCellMonitor* globalLoadCellPtr;
@@ -17,9 +19,14 @@ private:
     uint8_t dout, sck, buzzerPin;
     float calibrationFactor;
     DisplayManager& display;
+    NetworkManager& network;
+    
+    static const uint8_t LED_PIN = 15; // D8
+    static const uint8_t NUM_LEDS = 5;
+    CRGB leds[NUM_LEDS];
     
     unsigned long lastDisplayUpdate = 0;
-    const int displayRefreshInterval = 80; // Um pouco mais rápido para fluidez
+    const int displayRefreshInterval = 80;
     const int eepromAddr = 0;
 
     unsigned long timerStartTime = 0;
@@ -31,9 +38,53 @@ private:
     int lastStepIndex = -1;
     bool recipeFinishedSoundPlayed = false;
 
+    void updateLeds(int currentStepIndex, int targetTime, RecipeStepType type, int amount, bool ended) {
+        // Se LEDs desativados OU tempo zerado (não iniciado), apaga tudo
+        if (!network.isLedEnabled() || timerElapsedTime == 0) {
+            FastLED.clear();
+            FastLED.show();
+            return;
+        }
+
+        FastLED.setBrightness(network.getLedBrightness());
+
+        if (ended) {
+            static uint8_t hue = 0;
+            fill_rainbow(leds, NUM_LEDS, hue++, 40);
+            FastLED.show();
+            return;
+        }
+
+        if (!timerRunning || currentStepIndex == -1) {
+            FastLED.clear();
+            FastLED.show();
+            return;
+        }
+
+        int stepDuration = currentRecipe.steps[currentStepIndex].time;
+        int accTimeBefore = 0;
+        for (int i = 0; i < currentStepIndex; i++) accTimeBefore += currentRecipe.steps[i].time;
+        
+        float timeInCurrentStep = (timerElapsedTime / 1000.0) - accTimeBefore;
+        float remainingStepTime = stepDuration - timeInCurrentStep;
+        if (remainingStepTime < 0) remainingStepTime = 0;
+
+        int numToLight = ceil((remainingStepTime / (float)stepDuration) * NUM_LEDS);
+        if (numToLight < 0) numToLight = 0;
+        if (numToLight > NUM_LEDS) numToLight = NUM_LEDS;
+        
+        CRGB color = (amount > 0) ? CRGB::Blue : CRGB::Yellow;
+        
+        FastLED.clear();
+        for (int i = 0; i < numToLight; i++) {
+            leds[i] = color;
+        }
+        FastLED.show();
+    }
+
 public:
-    LoadCellMonitor(uint8_t d, uint8_t s, float defaultCf, DisplayManager& dm, uint8_t bPin) 
-        : scale(d, s), dout(d), sck(s), buzzerPin(bPin), calibrationFactor(defaultCf), display(dm) {
+    LoadCellMonitor(uint8_t d, uint8_t s, float defaultCf, DisplayManager& dm, uint8_t bPin, NetworkManager& nm) 
+        : scale(d, s), dout(d), sck(s), buzzerPin(bPin), display(dm), network(nm), calibrationFactor(defaultCf) {
         globalLoadCellPtr = this;
         currentRecipe.name = "Livre";
     }
@@ -42,6 +93,7 @@ public:
         currentRecipe = r;
         lastStepIndex = -1;
         recipeFinishedSoundPlayed = false;
+        FastLED.clear(true);
     }
     
     float getWeight() { return scale.getData(); }
@@ -52,6 +104,10 @@ public:
         scale.begin();
         pinMode(buzzerPin, OUTPUT);
         digitalWrite(buzzerPin, LOW);
+        
+        FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
+        FastLED.setBrightness(network.getLedBrightness());
+        FastLED.clear(true);
 
         EEPROM.begin(512);
         float savedCf;
@@ -85,10 +141,11 @@ public:
         oled.clearDisplay();
         oled.setTextColor(SSD1306_WHITE);
         
-        // --- Cálculo da Etapa Atual (Acumulada) ---
         int targetWeight = 0;
         int targetTime = 0;
         int currentStepIndex = -1;
+        int currentAmount = 0;
+        RecipeStepType currentType = RecipeStepType::POUR;
         bool recipeEnded = false;
         
         if (currentRecipe.steps.size() > 0) {
@@ -102,6 +159,8 @@ public:
                     targetWeight = accWeight;
                     targetTime = accTime;
                     currentStepIndex = i;
+                    currentType = currentRecipe.steps[i].type;
+                    currentAmount = currentRecipe.steps[i].amount;
                     foundStep = true;
                     break;
                 }
@@ -113,85 +172,43 @@ public:
             }
         }
 
-        // --- Lógica de Som ---
+        updateLeds(currentStepIndex, targetTime, currentType, currentAmount, recipeEnded);
+
         if (timerRunning) {
-            // Mudança de passo
             if (currentStepIndex != lastStepIndex && currentStepIndex != -1) {
-                if (lastStepIndex != -1) { 
-                    tone(buzzerPin, 2500, 300); // Frequência maior e mais longa
-                }
+                if (lastStepIndex != -1) { tone(buzzerPin, 2500, 300); }
                 lastStepIndex = currentStepIndex;
             }
-            // Fim de Receita
             if (recipeEnded && !recipeFinishedSoundPlayed) {
-                for(int i=0; i<3; i++) {
-                    tone(buzzerPin, 2500, 100);
-                    delay(150);
-                }
+                for(int i=0; i<3; i++) { tone(buzzerPin, 2500, 100); delay(150); }
                 recipeFinishedSoundPlayed = true;
+                FastLED.clear(true);
             }
         }
 
-        // --- LINHA 0-15: ÁREA AMARELA (Cronômetro e Alvos) ---
         oled.setTextSize(1);
-        
-        // Cronômetro Centralizado no topo
         unsigned long totalSeconds = timerElapsedTime / 1000;
         char timeBuf[12];
         sprintf(timeBuf, "%02u:%02u.%01u", (unsigned int)(totalSeconds / 60), (unsigned int)(totalSeconds % 60), (unsigned int)((timerElapsedTime % 1000) / 100));
-        oled.setCursor(35, 0); 
-        oled.print(timeBuf);
+        oled.setCursor(35, 0); oled.print(timeBuf);
 
-        // Ícone WiFi Discreto (Canto superior direito)
-        if (WiFi.status() == WL_CONNECTED) {
-            oled.drawPixel(125, 2, SSD1306_WHITE);
-            oled.drawPixel(123, 4, SSD1306_WHITE);
-            oled.drawPixel(127, 4, SSD1306_WHITE);
-        }
+        if (WiFi.status() == WL_CONNECTED) { oled.drawPixel(125, 2, SSD1306_WHITE); oled.drawPixel(123, 4, SSD1306_WHITE); oled.drawPixel(127, 4, SSD1306_WHITE); }
 
-        // Informação do Alvo (Linha 10 Amarela)
         oled.setCursor(0, 9);
         if (currentRecipe.steps.size() > 0) {
             char targetBuf[32];
-            if (recipeEnded) {
-                sprintf(targetBuf, "FIM! Total: %dml", targetWeight);
-            } else {
-                sprintf(targetBuf, "ALVO: %dml | %02u:%02u", targetWeight, (unsigned int)(targetTime/60), (unsigned int)(targetTime%60));
-            }
+            if (recipeEnded) { sprintf(targetBuf, "FIM! Total: %dml", targetWeight); }
+            else { sprintf(targetBuf, "ALVO: %dml | %02u:%02u", targetWeight, (unsigned int)(targetTime/60), (unsigned int)(targetTime%60)); }
             oled.print(targetBuf);
-        } else {
-            oled.print("MODO BALANCA");
-        }
+        } else { oled.print("MODO BALANCA"); }
 
-        // --- LINHA 16: GAP (NÃO USAR) ---
-
-        // --- LINHAS 17-63: ÁREA AZUL (Peso e Nome) ---
-        
-        // Exibição do Peso Grande (Centralizado)
         if (absWeight < 0.5) weight = 0.0;
-        oled.setCursor(10, 22); // Começa na área azul
-        if (absWeight < 1000.0) {
-            oled.setTextSize(4);
-            oled.print((int)weight);
-            oled.setTextSize(2);
-            oled.print("g");
-        } else {
-            oled.setTextSize(3);
-            oled.print((int)weight);
-            oled.setTextSize(1);
-            oled.print("g");
-        }
+        oled.setCursor(10, 22);
+        if (absWeight < 1000.0) { oled.setTextSize(4); oled.print((int)weight); oled.setTextSize(2); oled.print("g"); }
+        else { oled.setTextSize(3); oled.print((int)weight); oled.setTextSize(1); oled.print("g"); }
 
-        // Rodapé: Nome da Receita (Pequeno)
-        oled.setTextSize(1);
-        oled.setCursor(0, 56);
-        oled.print(currentRecipe.name);
-
-        if (scale.getTareStatus()) {
-            oled.setCursor(110, 56);
-            oled.print("[T]");
-        }
-
+        oled.setTextSize(1); oled.setCursor(0, 56); oled.print(currentRecipe.name);
+        if (scale.getTareStatus()) { oled.setCursor(110, 56); oled.print("[T]"); }
         oled.display();
     }
 
@@ -202,11 +219,10 @@ public:
         timerStartTime = 0;
         lastStepIndex = -1;
         recipeFinishedSoundPlayed = false;
+        FastLED.clear(true);
     }
 
-    void stop() {
-        detachInterrupt(digitalPinToInterrupt(dout));
-    }
+    void stop() { detachInterrupt(digitalPinToInterrupt(dout)); FastLED.clear(true); }
 };
 
 #endif

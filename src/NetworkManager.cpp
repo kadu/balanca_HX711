@@ -19,10 +19,10 @@ void NetworkManager::loadSettings() {
     EEPROM.get(eeprom_mqtt_start + 60, mqtt_pass);
     EEPROM.get(eeprom_mqtt_start + 80, mqtt_topic);
     EEPROM.get(eeprom_mqtt_start + 120, mqtt_enabled);
-    if (mqtt_enabled[0] != '0' && mqtt_enabled[0] != '1') {
-        mqtt_enabled[0] = '0';
-        mqtt_enabled[1] = '\0';
-    }
+    EEPROM.get(eeprom_mqtt_start + 122, leds_enabled);
+    EEPROM.get(eeprom_mqtt_start + 124, led_brightness);
+    if (mqtt_enabled[0] != '0' && mqtt_enabled[0] != '1') mqtt_enabled[0] = '0';
+    if (leds_enabled[0] != '0' && leds_enabled[0] != '1') leds_enabled[0] = '1';
 }
 
 void NetworkManager::saveSettings() {
@@ -31,15 +31,19 @@ void NetworkManager::saveSettings() {
     EEPROM.put(eeprom_mqtt_start + 60, mqtt_pass);
     EEPROM.put(eeprom_mqtt_start + 80, mqtt_topic);
     EEPROM.put(eeprom_mqtt_start + 120, mqtt_enabled);
+    EEPROM.put(eeprom_mqtt_start + 122, leds_enabled);
+    EEPROM.put(eeprom_mqtt_start + 124, led_brightness);
     EEPROM.commit();
 }
 
-void NetworkManager::updateSettings(const char* s, const char* u, const char* p, const char* t, bool e) {
+void NetworkManager::updateSettings(const char* s, const char* u, const char* p, const char* t, bool e, bool ledEnable, uint8_t brightness) {
     strncpy(mqtt_server, s, 39);
     strncpy(mqtt_user, u, 19);
     strncpy(mqtt_pass, p, 19);
     strncpy(mqtt_topic, t, 39);
     mqtt_enabled[0] = e ? '1' : '0';
+    leds_enabled[0] = ledEnable ? '1' : '0';
+    led_brightness = brightness;
     saveSettings();
     mqttClient.disconnect();
     mqttClient.setServer(mqtt_server, 1883);
@@ -60,13 +64,10 @@ bool NetworkManager::testConnection(const char* s, const char* u, const char* p,
     if (connected) {
         String testTopic = String(t) + "/test";
         mqttClient.publish(testTopic.c_str(), "Teste de Conexão OK");
-        // Volta para a configuração original após o teste
         mqttClient.disconnect();
         mqttClient.setServer(mqtt_server, 1883);
         return true;
     }
-    
-    // Restaura servidor original se falhar
     mqttClient.setServer(mqtt_server, 1883);
     return false;
 }
@@ -78,12 +79,15 @@ void NetworkManager::setupConfigPortal() {
     WiFiManagerParameter custom_mqtt_user("user", "Usuario MQTT", mqtt_user, 20);
     WiFiManagerParameter custom_mqtt_pass("pass", "Senha MQTT", mqtt_pass, 20);
     WiFiManagerParameter custom_mqtt_topic("topic", "Topico Base", mqtt_topic, 40);
-    const char* custom_html = mqtt_enabled[0] == '1' ? "type='checkbox' value='1' checked" : "type='checkbox' value='1'";
-    WiFiManagerParameter custom_mqtt_en("mqtt_en", "Ativar MQTT", "1", 2, custom_html, WFM_LABEL_AFTER);
-    wm.addParameter(&custom_mqtt_server); wm.addParameter(&custom_mqtt_user); wm.addParameter(&custom_mqtt_pass); wm.addParameter(&custom_mqtt_topic); wm.addParameter(&custom_mqtt_en);
+    const char* mqtt_html = mqtt_enabled[0] == '1' ? "type='checkbox' value='1' checked" : "type='checkbox' value='1'";
+    WiFiManagerParameter custom_mqtt_en("mqtt_en", "Ativar MQTT", "1", 2, mqtt_html, WFM_LABEL_AFTER);
+    const char* led_html = leds_enabled[0] == '1' ? "type='checkbox' value='1' checked" : "type='checkbox' value='1'";
+    WiFiManagerParameter custom_led_en("led_en", "Ativar LEDs", "1", 2, led_html, WFM_LABEL_AFTER);
+    wm.addParameter(&custom_mqtt_server); wm.addParameter(&custom_mqtt_user); wm.addParameter(&custom_mqtt_pass); wm.addParameter(&custom_mqtt_topic); wm.addParameter(&custom_mqtt_en); wm.addParameter(&custom_led_en);
     if (!wm.startConfigPortal("BalancaAP")) { delay(1000); ESP.restart(); }
     strcpy(mqtt_server, custom_mqtt_server.getValue()); strcpy(mqtt_user, custom_mqtt_user.getValue()); strcpy(mqtt_pass, custom_mqtt_pass.getValue()); strcpy(mqtt_topic, custom_mqtt_topic.getValue());
     strcpy(mqtt_enabled, strlen(custom_mqtt_en.getValue()) == 0 ? "0" : "1");
+    strcpy(leds_enabled, strlen(custom_led_en.getValue()) == 0 ? "0" : "1");
     saveSettings(); ESP.restart();
 }
 
